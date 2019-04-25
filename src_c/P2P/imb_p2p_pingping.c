@@ -100,7 +100,9 @@ void imb_p2p_pingping()
 				MPI_Irecv(r_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request[0]);
 				touch_send_buff(size, s_buffer);
 				MPI_Isend(s_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request[1]);
-                usleep(500);
+				
+				if(!imb_p2p_config.rank) usleep(100);
+
 				MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
 				touch_recv_buff(size, r_buffer);
 			}
