@@ -49,78 +49,95 @@ goods and services.
 
 #include "imb_p2p.h"
 
-void imb_p2p_pingping() {
-    char *s_buffer;
-    char *r_buffer;
-    size_t msg_size_index;
-    int nranks = imb_p2p_config.nranks;
-    if ((nranks < 2) || (nranks & 1)) {
-        if (imb_p2p_config.rank == 0) {
-            fprintf(unit, "\n");
-            fprintf(unit, "# !! Benchmark %s invalid for %d processes !!\n", IMB_P2P_PINGPING, nranks);
-            fflush(unit);
-        }
-        return;
-    }
-    if (imb_p2p_config.rank == 0) {
-        imb_p2p_print_benchmark_header(IMB_P2P_PINGPING);
-        fprintf(unit, " %12s %12s %12s %12s %12s\n", "#bytes", "#repetitions", "t[usec]", "Mbytes/sec", "Msg/sec");
-        fflush(unit);
-    }
-    s_buffer = (char *)imb_p2p_alloc_mem(imb_p2p_config.messages.max_size);
-    r_buffer = (char *)imb_p2p_alloc_mem(imb_p2p_config.messages.max_size);
-    memset(s_buffer, imb_p2p_config.rank, imb_p2p_config.messages.max_size);
-    memset(r_buffer, imb_p2p_config.rank, imb_p2p_config.messages.max_size);
-    for (msg_size_index = 0; msg_size_index < imb_p2p_config.messages.length; msg_size_index++) {
-        size_t size = imb_p2p_config.messages.array[msg_size_index];
-        size_t iteration, number_of_iterations, number_of_warm_up_iterations;
-        double time;
-        MPI_Request request;
-        int partner = (imb_p2p_config.rank + (nranks / 2)) % nranks;
-        get_iters(size, &number_of_iterations, &number_of_warm_up_iterations);
-        imb_p2p_pause();
-        imb_p2p_barrier(MPI_COMM_WORLD);
-        for (iteration = 0; iteration < number_of_warm_up_iterations; iteration++) {
-            MPI_Irecv(r_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request);
-            touch_send_buff(size, s_buffer);
-            MPI_Send(s_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD);
-            MPI_Wait(&request, MPI_STATUS_IGNORE);
-            touch_recv_buff(size, r_buffer);
-        }
-        imb_p2p_barrier(MPI_COMM_WORLD);
-        time = MPI_Wtime();
-        for (iteration = 0; iteration < number_of_iterations; iteration++) {
-            MPI_Irecv(r_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request);
-            touch_send_buff(size, s_buffer);
-            MPI_Send(s_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD);
-            MPI_Wait(&request, MPI_STATUS_IGNORE);
-            touch_recv_buff(size, r_buffer);
-        }
-        time = MPI_Wtime() - time;
-        imb_p2p_pause();
-        imb_p2p_barrier(MPI_COMM_WORLD);
-        if (imb_p2p_config.rank) {
-            MPI_Send(&time, 1, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD);
-        } else {
-            double bandwidth, message_rate, latency;
-            double max_time = time;
-            double aggregate_time = time;
-            int source_rank;
-            for (source_rank = 1; source_rank < nranks; source_rank++) {
-                double t = 0;
-                MPI_Recv(&t, 1, MPI_DOUBLE, source_rank, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                aggregate_time += t;
-                if (max_time < t) {
-                    max_time = t;
+#define DEVI_ITER 100
+
+void imb_p2p_pingping()
+{
+	char *s_buffer;
+	char *r_buffer;
+	size_t msg_size_index;
+	int nranks = imb_p2p_config.nranks;
+	if ((nranks < 2) || (nranks & 1)) {
+		if (imb_p2p_config.rank == 0) {
+			fprintf(unit, "\n");
+			fprintf(unit, "# !! Benchmark %s invalid for %d processes !!\n", IMB_P2P_PINGPING, nranks);
+			fflush(unit);
+		}
+		return;
+	}
+	if (imb_p2p_config.rank == 0) {
+		imb_p2p_print_benchmark_header(IMB_P2P_PINGPING);
+		fprintf(unit, " %12s %12s %12s %12s %12s %12s\n", "#bytes", "#repetitions", "t[usec]", "Mbytes/sec", "Msg/sec", "DEVI");
+		fflush(unit);
+	}
+	s_buffer = (char *)imb_p2p_alloc_mem(imb_p2p_config.messages.max_size);
+	r_buffer = (char *)imb_p2p_alloc_mem(imb_p2p_config.messages.max_size);
+	memset(s_buffer, imb_p2p_config.rank, imb_p2p_config.messages.max_size);
+	memset(r_buffer, imb_p2p_config.rank, imb_p2p_config.messages.max_size);
+	for (msg_size_index = 0; msg_size_index < imb_p2p_config.messages.length; msg_size_index++) {
+		size_t size = imb_p2p_config.messages.array[msg_size_index];
+		size_t iteration, number_of_iterations, number_of_warm_up_iterations;
+		double time;
+		MPI_Request request[2];
+		int partner = (imb_p2p_config.rank + (nranks / 2)) % nranks;
+		get_iters(size, &number_of_iterations, &number_of_warm_up_iterations);
+		int j;
+		double total_time = 0.0;
+		double single_time[DEVI_ITER];
+		for (j = 0; j < DEVI_ITER; ++j) {
+			imb_p2p_pause();
+			imb_p2p_barrier(MPI_COMM_WORLD);
+			for (iteration = 0; iteration < number_of_warm_up_iterations; iteration++) {
+				MPI_Irecv(r_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request[0]);
+				touch_send_buff(size, s_buffer);
+				MPI_Isend(s_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request[1]);
+				MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
+				touch_recv_buff(size, r_buffer);
+			}
+			imb_p2p_barrier(MPI_COMM_WORLD);
+			time = MPI_Wtime();
+			for (iteration = 0; iteration < number_of_iterations; iteration++) {
+				MPI_Irecv(r_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request[0]);
+				touch_send_buff(size, s_buffer);
+				MPI_Isend(s_buffer, size, MPI_BYTE, partner, 0, MPI_COMM_WORLD, &request[1]);
+				MPI_Waitall(2, request, MPI_STATUSES_IGNORE);
+				touch_recv_buff(size, r_buffer);
+			}
+			time = MPI_Wtime() - time;
+			imb_p2p_pause();
+			imb_p2p_barrier(MPI_COMM_WORLD);
+
+            double cur_max_time = time;
+            if (imb_p2p_config.rank) {
+                MPI_Send(&time, 1, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD);
+            } else {
+                int source_rank;
+                for (source_rank = 1; source_rank < nranks; source_rank++) {
+                    double t;
+                    MPI_Recv(&t, 1, MPI_DOUBLE, source_rank, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    if(t > cur_max_time)
+                        cur_max_time = t;
                 }
+                single_time[j] = cur_max_time;
+                total_time += cur_max_time;
             }
-            bandwidth = ((number_of_iterations * nranks * size) / (1000000.0 * max_time));
-            message_rate = ((number_of_iterations * nranks) / max_time);
-            latency = (1000000.0 * aggregate_time) / (number_of_iterations * nranks);
-            fprintf(unit, " %12" PRIu64 " %12" PRIu64 " %12.2f %12.2f %12.0f\n", size, number_of_iterations, latency, bandwidth, message_rate);
-            fflush(unit);
-        }
-    }
-    imb_p2p_free_mem(s_buffer);
-    imb_p2p_free_mem(r_buffer);
+		}
+
+		if (!imb_p2p_config.rank) {
+			double bandwidth, message_rate, latency;
+			double ave_time = total_time / DEVI_ITER;
+			double devi_time = 0.0;
+			for (j = 0; j < DEVI_ITER; j++) {
+				devi_time += (single_time[j] - ave_time) * (single_time[j] - ave_time);
+			}
+			devi_time = sqrt(devi_time / (DEVI_ITER - 1));
+			bandwidth = ((number_of_iterations * nranks * size) / (1000000.0 * ave_time));
+			message_rate = ((number_of_iterations * nranks) / (ave_time));
+			latency = (1000000.0 * ave_time) / (2 * number_of_iterations);
+			fprintf(unit, " %12" PRIu64 " %12" PRIu64 " %12.2f %12.2f %12.0f %12.3f\n", size, number_of_iterations, latency, bandwidth, message_rate, devi_time);
+			fflush(unit);
+		}
+	}
+	imb_p2p_free_mem(s_buffer);
+	imb_p2p_free_mem(r_buffer);
 }
